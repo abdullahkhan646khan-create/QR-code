@@ -1,6 +1,6 @@
-# Render Blueprint: one web service. Data is stored in Supabase Postgres.
-# Render > New > Blueprint > pick this repo. You'll be asked for DATABASE_URL (Supabase connection
-# string, Session pooler) and ADMIN_PASSWORD.
+# Render Blueprint: one web service. Data is stored in Supabase.
+# Render > New > Blueprint > pick this repo. You'll be asked for SUPABASE_URL,
+# SUPABASE_SERVICE_ROLE_KEY and ADMIN_PASSWORD.
 services:
   - type: web
     name: trainer-pass
@@ -15,7 +15,9 @@ services:
         value: production
       - key: NODE_VERSION
         value: "22"
-      - key: DATABASE_URL
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: SESSION_SECRET
         generateValue: true

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import { promisify } from 'node:util';
-import { one, getSetting, setSetting } from './db.js';
+import { users, getSetting, setSetting } from './store.js';
 
 const scrypt = promisify(crypto.scrypt);
 const COOKIE = 'tp_session';
@@ -61,7 +61,7 @@ export async function loadUser(req, _res, next) {
       const expected = await sign(`${uid}.${exp}`);
       const good = sig && sig.length === expected.length && crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expected));
       if (good && Number(exp) > Date.now()) {
-        req.user = await one('select id, role, name, username, phone from users where id = $1 and active', [Number(uid)]);
+        req.user = await users.activeById(Number(uid));
       }
     }
     next();

@@ -58,3 +58,12 @@ export const formatPhone = digits => digits ? '+' + digits : '';
 export function cleanText(v, max = 80) {
   return String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, max);
 }
+
+// Midnight today in the gym's time zone, as an ISO timestamp (for "scans today").
+export function startOfTodayISO() {
+  const now = new Date();
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: TIMEZONE, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    .formatToParts(now).map(x => [x.type, x.value]));
+  const offset = Date.UTC(+p.year, +p.month - 1, +p.day, +p.hour, +p.minute, +p.second) - Math.floor(now.getTime() / 1000) * 1000;
+  return new Date(Date.UTC(+p.year, +p.month - 1, +p.day) - offset).toISOString();
+}

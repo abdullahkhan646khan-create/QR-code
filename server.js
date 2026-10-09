@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initDb } from './src/db.js';
+import { initStore } from './src/store.js';
 import { loadUser } from './src/auth.js';
 import { api, apiErrors, publicQrPng } from './src/routes.js';
 import { resumeWhatsApp } from './src/whatsapp.js';
@@ -9,7 +9,7 @@ import { resumeWhatsApp } from './src/whatsapp.js';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const page = name => (req, res) => res.sendFile(path.join(root, 'public', name));
 
-await initDb();
+await initStore();
 
 const app = express();
 app.set('trust proxy', 1);

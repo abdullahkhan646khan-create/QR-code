@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import QRCode from 'qrcode';
-import { q, one, getSetting, setSetting, createPass } from './db.js';
+import { getSetting, setSetting, users, members, passes, scans } from './store.js';
 import { hashPassword, verifyPassword, setSession, clearSession, requireUser, requireOwner, loginAllowed, loginFailed, loginSucceeded } from './auth.js';
-import { todayISO, addDays, packageEnd, passStatus, fmtDate, normalizePhone, formatPhone, cleanText, TIMEZONE } from './util.js';
+import { todayISO, addDays, packageEnd, passStatus, fmtDate, normalizePhone, formatPhone, cleanText, startOfTodayISO } from './util.js';
 import { whatsappState, whatsappReady, connectWhatsApp, disconnectWhatsApp, sendImage, sendText } from './whatsapp.js';
 
 export const api = Router();
@@ -14,15 +14,9 @@ const baseUrl = req => (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_UR
 const passUrl = (req, token) => `${baseUrl(req)}/p/${token}`;
 const qrPng = text => QRCode.toBuffer(text, { width: 640, margin: 2, errorCorrectionLevel: 'M' });
 const gymName = () => getSetting('gym_name', 'Our Gym');
+const countryCode = () => getSetting('country_code', '92');
 
-/* ---------- members: shared query and shape ---------- */
-const MEMBER_SQL = `
-  select m.id, m.name, m.phone, m.trainer_id, u.name as trainer_name, m.created_at,
-         p.id as pass_id, p.token, p.start_date, p.end_date, p.revoked, p.sent_at
-  from members m
-  join users u on u.id = m.trainer_id
-  left join lateral (select * from passes where member_id = m.id order by id desc limit 1) p on true`;
-
+/* ---------- members: shape for the app ---------- */
 async function caption(row, url) {
   const first = row.name.split(' ')[0];
   return `Hello ${first}, here is your personal training QR code at ${await gymName()}.\n\n`
@@ -31,24 +25,19 @@ async function caption(row, url) {
 }
 
 async function shapeMember(req, row) {
-  const pass = row.pass_id ? { start_date: row.start_date, end_date: row.end_date, revoked: row.revoked } : null;
   const url = row.token ? passUrl(req, row.token) : null;
   return {
     id: row.id, name: row.name, phone: formatPhone(row.phone),
     trainer: { id: row.trainer_id, name: row.trainer_name },
     pass: row.pass_id ? { id: row.pass_id, token: row.token, start: row.start_date, end: row.end_date, sentAt: row.sent_at, url } : null,
-    status: passStatus(pass),
+    status: passStatus(row.pass_id ? row : null),
     waLink: url ? `https://wa.me/${row.phone}?text=${encodeURIComponent(await caption(row, url))}` : null,
   };
 }
 
-async function memberRow(id) {
-  return one(`${MEMBER_SQL} where m.id = $1`, [id]);
-}
-
 // Owners reach every member; trainers only their own.
 async function accessibleMember(req, id) {
-  const row = await memberRow(Number(id));
+  const row = await members.row(Number(id));
   if (!row || (req.user.role === 'trainer' && row.trainer_id !== req.user.id)) fail(404, 'Member not found.');
   return row;
 }
@@ -58,19 +47,22 @@ async function sendPass(req, row) {
   try {
     const url = passUrl(req, row.token);
     await sendImage(row.phone, await qrPng(url), await caption(row, url));
-    await q('update passes set sent_at = now() where id = $1', [row.pass_id]);
+    await passes.markSent(row.pass_id);
     return { sent: true };
   } catch (err) {
     return { sent: false, error: err.message || 'Sending failed.' };
   }
 }
+const maybeSend = async (req, row) => (req.body?.send !== false && whatsappReady()
+  ? sendPass(req, row)
+  : { sent: false, error: whatsappReady() ? null : 'WhatsApp is not connected.' });
 
 /* ---------- login ---------- */
 api.post('/login', async (req, res) => {
   const username = cleanText(req.body?.username, 40).toLowerCase();
   const key = `${req.ip}|${username}`;
   if (!loginAllowed(key)) fail(429, 'Too many tries. Wait 10 minutes and try again.');
-  const user = await one('select * from users where username = $1 and active', [username]);
+  const user = await users.activeByUsername(username);
   if (!user || !(await verifyPassword(req.body?.password || '', user.password_hash))) {
     loginFailed(key);
     fail(401, 'Wrong username or password.');
@@ -86,40 +78,34 @@ api.get('/me', requireUser, async (req, res) => {
   res.json({
     user: req.user,
     gymName: await gymName(),
-    countryCode: await getSetting('country_code', '92'),
+    countryCode: await countryCode(),
     autoSend: (await getSetting('auto_send', 'true')) === 'true',
     whatsapp: { connected: whatsappReady() },
   });
 });
 
 api.post('/me/password', requireUser, async (req, res) => {
-  const user = await one('select password_hash from users where id = $1', [req.user.id]);
+  const user = await users.byId(req.user.id);
   if (!(await verifyPassword(req.body?.current || '', user.password_hash))) fail(400, 'Your current password is wrong.');
   checkPassword(req.body?.next);
-  await q('update users set password_hash = $1 where id = $2', [await hashPassword(req.body.next), req.user.id]);
+  await users.update(req.user.id, { password_hash: await hashPassword(req.body.next) });
   res.json({ ok: true });
 });
 
 /* ---------- overview ---------- */
 api.get('/overview', requireUser, async (req, res) => {
-  const mine = req.user.role === 'trainer';
-  const rows = await q(`${MEMBER_SQL} ${mine ? 'where m.trainer_id = $1' : ''} order by m.name`, mine ? [req.user.id] : []);
+  const trainerId = req.user.role === 'trainer' ? req.user.id : null;
+  const [rows, scansToday, recent, trainerCount] = await Promise.all([
+    members.list(trainerId), scans.countSince(startOfTodayISO(), trainerId), scans.recent(trainerId),
+    trainerId ? null : users.countActiveTrainers(),
+  ]);
   const statuses = rows.map(r => passStatus(r.pass_id ? r : null));
   const count = key => statuses.filter(s => s.key === key).length;
-  const today = todayISO();
-  const scanWhere = mine ? 'and s.trainer_id = $3' : '';
-  const scansToday = await one(`select count(*)::int as n from scans s where (s.created_at at time zone $1)::date = $2::date ${scanWhere}`,
-    mine ? [TIMEZONE, today, req.user.id] : [TIMEZONE, today]);
-  const recent = await q(`
-    select s.id, s.result, s.created_at, m.name as member_name, t.name as trainer_name, b.name as scanned_by
-    from scans s left join members m on m.id = s.member_id left join users t on t.id = s.trainer_id left join users b on b.id = s.scanned_by
-    ${mine ? 'where s.trainer_id = $1' : ''} order by s.id desc limit 8`, mine ? [req.user.id] : []);
   const expiring = rows.map((r, i) => ({ r, s: statuses[i] })).filter(x => x.s.key === 'valid' && x.s.days <= 5)
     .sort((a, b) => a.s.days - b.s.days).slice(0, 6);
   res.json({
     members: rows.length, valid: count('valid'), expired: count('expired'), expiringSoon: expiring.length,
-    trainers: mine ? null : (await one(`select count(*)::int as n from users where role = 'trainer' and active`)).n,
-    scansToday: scansToday.n,
+    trainers: trainerCount, scansToday,
     expiring: await Promise.all(expiring.map(x => shapeMember(req, x.r))),
     recentScans: recent,
     whatsapp: whatsappState().status,
@@ -128,9 +114,8 @@ api.get('/overview', requireUser, async (req, res) => {
 
 /* ---------- trainers (owner) ---------- */
 api.get('/trainers', requireOwner, async (req, res) => {
-  const trainers = await q(`select id, name, username, phone, active, created_at from users where role = 'trainer' order by active desc, name`);
-  const rows = await q(MEMBER_SQL);
-  res.json(trainers.map(t => {
+  const [list, rows] = await Promise.all([users.trainers(), members.list()]);
+  res.json(list.map(t => {
     const mine = rows.filter(r => r.trainer_id === t.id).map(r => passStatus(r.pass_id ? r : null));
     return { ...t, phone: formatPhone(t.phone), members: mine.length, valid: mine.filter(s => s.key === 'valid').length, expired: mine.filter(s => s.key === 'expired').length };
   }));
@@ -147,110 +132,104 @@ api.post('/trainers', requireOwner, async (req, res) => {
   const name = cleanText(req.body?.name, 60), username = cleanText(req.body?.username, 30).toLowerCase(), password = String(req.body?.password || '');
   if (name.length < 2) fail(400, "Enter the trainer's name.");
   checkUsername(username); checkPassword(password);
-  const phone = req.body?.phone ? normalizePhone(req.body.phone, await getSetting('country_code', '92')) : null;
+  const phone = req.body?.phone ? normalizePhone(req.body.phone, await countryCode()) : null;
   if (req.body?.phone && !phone) fail(400, 'That phone number looks wrong.');
-  if (await one('select id from users where username = $1', [username])) fail(409, `The username "${username}" is taken. Pick another.`);
-  const t = await one(`insert into users (role, name, username, password_hash, phone) values ('trainer', $1, $2, $3, $4) returning id, name, username, phone`,
-    [name, username, await hashPassword(password), phone]);
+  if (await users.usernameTaken(username)) fail(409, `The username "${username}" is taken. Pick another.`);
+  const t = await users.insert({ role: 'trainer', name, username, password_hash: await hashPassword(password), phone });
   res.status(201).json({ ...t, phone: formatPhone(t.phone) });
 });
 
 api.patch('/trainers/:id', requireOwner, async (req, res) => {
-  const t = await one(`select * from users where id = $1 and role = 'trainer'`, [Number(req.params.id)]);
+  const t = await users.trainer(Number(req.params.id));
   if (!t) fail(404, 'Trainer not found.');
-  const name = req.body?.name !== undefined ? cleanText(req.body.name, 60) : t.name;
-  if (name.length < 2) fail(400, "Enter the trainer's name.");
-  let phone = t.phone;
-  if (req.body?.phone !== undefined) {
-    phone = req.body.phone ? normalizePhone(req.body.phone, await getSetting('country_code', '92')) : null;
-    if (req.body.phone && !phone) fail(400, 'That phone number looks wrong.');
+  const fields = {};
+  if (req.body?.name !== undefined) {
+    fields.name = cleanText(req.body.name, 60);
+    if (fields.name.length < 2) fail(400, "Enter the trainer's name.");
   }
-  let hash = t.password_hash;
-  if (req.body?.password) { checkPassword(req.body.password); hash = await hashPassword(req.body.password); }
-  const active = typeof req.body?.active === 'boolean' ? req.body.active : t.active;
-  await q('update users set name = $1, phone = $2, password_hash = $3, active = $4 where id = $5', [name, phone, hash, active, t.id]);
+  if (req.body?.phone !== undefined) {
+    fields.phone = req.body.phone ? normalizePhone(req.body.phone, await countryCode()) : null;
+    if (req.body.phone && !fields.phone) fail(400, 'That phone number looks wrong.');
+  }
+  if (req.body?.password) { checkPassword(req.body.password); fields.password_hash = await hashPassword(req.body.password); }
+  if (typeof req.body?.active === 'boolean') fields.active = req.body.active;
+  if (Object.keys(fields).length) await users.update(t.id, fields);
   res.json({ ok: true });
 });
 
 api.delete('/trainers/:id', requireOwner, async (req, res) => {
   const id = Number(req.params.id);
-  const n = (await one('select count(*)::int as n from members where trainer_id = $1', [id])).n;
+  const n = await members.countForTrainer(id);
   if (n > 0) fail(409, `This trainer still has ${n} member${n === 1 ? '' : 's'}. Move them to another trainer first, or turn off the login instead.`);
-  await q(`update scans set trainer_id = null, scanned_by = null where trainer_id = $1 or scanned_by = $1`, [id]);
-  await q(`delete from users where id = $1 and role = 'trainer'`, [id]);
+  await users.removeTrainer(id);
   res.json({ ok: true });
 });
 
 /* ---------- members ---------- */
 api.get('/members', requireUser, async (req, res) => {
   const trainerId = req.user.role === 'trainer' ? req.user.id : (req.query.trainer ? Number(req.query.trainer) : null);
-  const rows = await q(`${MEMBER_SQL} ${trainerId ? 'where m.trainer_id = $1' : ''} order by m.name`, trainerId ? [trainerId] : []);
+  const rows = await members.list(trainerId);
   res.json(await Promise.all(rows.map(r => shapeMember(req, r))));
 });
 
 async function readMemberInput(req) {
   const name = cleanText(req.body?.name, 60);
   if (name.length < 2) fail(400, "Enter the member's name.");
-  const phone = normalizePhone(req.body?.phone, await getSetting('country_code', '92'));
+  const phone = normalizePhone(req.body?.phone, await countryCode());
   if (!phone) fail(400, 'Enter a WhatsApp number, for example 0300 1234567.');
   let trainerId = req.user.id;
   if (req.user.role === 'owner') {
     trainerId = Number(req.body?.trainerId);
-    if (!(await one(`select id from users where id = $1 and role = 'trainer' and active`, [trainerId]))) fail(400, 'Pick a trainer.');
+    if (!(await users.activeTrainer(trainerId))) fail(400, 'Pick a trainer.');
   }
   return { name, phone, trainerId };
 }
+const monthsFrom = req => Math.min(Math.max(Number(req.body?.months) || 1, 1), 12);
 
 api.post('/members', requireUser, async (req, res) => {
   const { name, phone, trainerId } = await readMemberInput(req);
-  const months = Math.min(Math.max(Number(req.body?.months) || 1, 1), 12);
-  const m = await one('insert into members (trainer_id, name, phone) values ($1, $2, $3) returning id', [trainerId, name, phone]);
+  const m = await members.insert({ trainer_id: trainerId, name, phone });
   const start = todayISO();
-  await createPass(m.id, start, packageEnd(start, months));
-  let row = await memberRow(m.id);
-  const send = req.body?.send !== false && whatsappReady() ? await sendPass(req, row) : { sent: false, error: whatsappReady() ? null : 'WhatsApp is not connected.' };
-  row = await memberRow(m.id);
-  res.status(201).json({ member: await shapeMember(req, row), send });
+  await passes.create(m.id, start, packageEnd(start, monthsFrom(req)));
+  const send = await maybeSend(req, await members.row(m.id));
+  res.status(201).json({ member: await shapeMember(req, await members.row(m.id)), send });
 });
 
 api.patch('/members/:id', requireUser, async (req, res) => {
   const row = await accessibleMember(req, req.params.id);
-  const name = req.body?.name !== undefined ? cleanText(req.body.name, 60) : row.name;
-  if (name.length < 2) fail(400, "Enter the member's name.");
-  let phone = row.phone;
+  const fields = {};
+  if (req.body?.name !== undefined) {
+    fields.name = cleanText(req.body.name, 60);
+    if (fields.name.length < 2) fail(400, "Enter the member's name.");
+  }
   if (req.body?.phone !== undefined) {
-    phone = normalizePhone(req.body.phone, await getSetting('country_code', '92'));
-    if (!phone) fail(400, 'Enter a WhatsApp number, for example 0300 1234567.');
+    fields.phone = normalizePhone(req.body.phone, await countryCode());
+    if (!fields.phone) fail(400, 'Enter a WhatsApp number, for example 0300 1234567.');
   }
-  let trainerId = row.trainer_id;
-  if (req.user.role === 'owner' && req.body?.trainerId) {
-    trainerId = Number(req.body.trainerId);
-    if (!(await one(`select id from users where id = $1 and role = 'trainer'`, [trainerId]))) fail(400, 'Pick a trainer.');
+  if (req.user.role === 'owner' && req.body?.trainerId && Number(req.body.trainerId) !== row.trainer_id) {
+    if (!(await users.trainer(Number(req.body.trainerId)))) fail(400, 'Pick a trainer.');
+    fields.trainer_id = Number(req.body.trainerId);
   }
-  await q('update members set name = $1, phone = $2, trainer_id = $3 where id = $4', [name, phone, trainerId, row.id]);
-  res.json({ member: await shapeMember(req, await memberRow(row.id)) });
+  if (Object.keys(fields).length) await members.update(row.id, fields);
+  res.json({ member: await shapeMember(req, await members.row(row.id)) });
 });
 
 api.delete('/members/:id', requireUser, async (req, res) => {
   const row = await accessibleMember(req, req.params.id);
-  await q('update scans set member_id = null where member_id = $1', [row.id]);
-  await q('delete from members where id = $1', [row.id]);
+  await members.remove(row.id);
   res.json({ ok: true });
 });
 
 // New month: a fresh QR code. If the old one still has days left, they carry over. The old code stops working.
 api.post('/members/:id/renew', requireUser, async (req, res) => {
   const row = await accessibleMember(req, req.params.id);
-  const months = Math.min(Math.max(Number(req.body?.months) || 1, 1), 12);
   const today = todayISO();
   const stillValid = row.pass_id && !row.revoked && row.end_date >= today;
-  const end = stillValid ? packageEnd(addDays(row.end_date, 1), months) : packageEnd(today, months);
-  await q('update passes set revoked = true where member_id = $1', [row.id]);
-  await createPass(row.id, today, end);
-  let fresh = await memberRow(row.id);
-  const send = req.body?.send !== false && whatsappReady() ? await sendPass(req, fresh) : { sent: false, error: whatsappReady() ? null : 'WhatsApp is not connected.' };
-  fresh = await memberRow(row.id);
-  res.json({ member: await shapeMember(req, fresh), send });
+  const end = stillValid ? packageEnd(addDays(row.end_date, 1), monthsFrom(req)) : packageEnd(today, monthsFrom(req));
+  await passes.revokeAll(row.id);
+  await passes.create(row.id, today, end);
+  const send = await maybeSend(req, await members.row(row.id));
+  res.json({ member: await shapeMember(req, await members.row(row.id)), send });
 });
 
 api.post('/members/:id/send', requireUser, async (req, res) => {
@@ -258,7 +237,7 @@ api.post('/members/:id/send', requireUser, async (req, res) => {
   if (!row.pass_id) fail(400, 'This member has no QR code yet.');
   const send = await sendPass(req, row);
   if (!send.sent) fail(502, send.error);
-  res.json({ member: await shapeMember(req, await memberRow(row.id)), send });
+  res.json({ member: await shapeMember(req, await members.row(row.id)), send });
 });
 
 api.get('/members/:id/qr.png', requireUser, async (req, res) => {
@@ -276,16 +255,13 @@ const tokenFrom = code => {
 
 api.post('/scan', requireUser, async (req, res) => {
   const token = tokenFrom(req.body?.code);
-  const pass = token && await one(`
-    select p.*, m.id as member_id, m.name as member_name, u.id as trainer_id, u.name as trainer_name
-    from passes p join members m on m.id = p.member_id join users u on u.id = m.trainer_id where p.token = $1`, [token]);
+  const pass = token ? await passes.byToken(token) : null;
   if (!pass) {
-    await q('insert into scans (scanned_by, result) values ($1, $2)', [req.user.id, 'unknown']);
+    await scans.add({ scanned_by: req.user.id, result: 'unknown' });
     return res.json({ result: 'unknown', message: `This QR code is not from ${await gymName()}.` });
   }
   const status = passStatus(pass);
-  await q('insert into scans (pass_id, member_id, trainer_id, scanned_by, result) values ($1, $2, $3, $4, $5)',
-    [pass.id, pass.member_id, pass.trainer_id, req.user.id, status.key]);
+  await scans.add({ pass_id: pass.id, member_id: pass.member_id, trainer_id: pass.trainer_id, scanned_by: req.user.id, result: status.key });
   const messages = {
     valid: `Trains under ${pass.trainer_name}`,
     expired: 'The package has ended. Ask the member to renew.',
@@ -311,10 +287,6 @@ api.patch('/settings', requireOwner, async (req, res) => {
     await setSetting('country_code', v);
   }
   if (typeof req.body?.autoSend === 'boolean') await setSetting('auto_send', String(req.body.autoSend));
-  if (req.body?.password) {
-    checkPassword(req.body.password);
-    await q('update users set password_hash = $1 where id = $2', [await hashPassword(req.body.password), req.user.id]);
-  }
   res.json({ ok: true });
 });
 
@@ -322,7 +294,7 @@ api.get('/whatsapp', requireOwner, (req, res) => res.json(whatsappState()));
 api.post('/whatsapp/connect', requireOwner, async (req, res) => { await connectWhatsApp(); res.json(whatsappState()); });
 api.post('/whatsapp/disconnect', requireOwner, async (req, res) => { await disconnectWhatsApp(); res.json(whatsappState()); });
 api.post('/whatsapp/test', requireOwner, async (req, res) => {
-  const phone = normalizePhone(req.body?.phone, await getSetting('country_code', '92'));
+  const phone = normalizePhone(req.body?.phone, await countryCode());
   if (!phone) fail(400, 'Enter a WhatsApp number.');
   try { await sendText(phone, `Test message from ${await gymName()}. WhatsApp is connected and QR codes can be sent.`); }
   catch (err) { fail(502, err.message); }
@@ -331,18 +303,14 @@ api.post('/whatsapp/test', requireOwner, async (req, res) => {
 
 /* ---------- public member pass ---------- */
 api.get('/public/pass/:token', async (req, res) => {
-  const pass = await one(`
-    select p.*, m.name as member_name, u.name as trainer_name
-    from passes p join members m on m.id = p.member_id join users u on u.id = m.trainer_id where p.token = $1`, [req.params.token]);
+  const pass = await passes.byToken(req.params.token);
   if (!pass) fail(404, 'This QR code was not found.');
-  const status = passStatus(pass);
-  res.json({ gymName: await gymName(), member: pass.member_name, trainer: pass.trainer_name, start: pass.start_date, end: pass.end_date, status, qr: `/p/${pass.token}/qr.png` });
+  res.json({ gymName: await gymName(), member: pass.member_name, trainer: pass.trainer_name, start: pass.start_date, end: pass.end_date, status: passStatus(pass), qr: `/p/${pass.token}/qr.png` });
 });
 
 export async function publicQrPng(req, res) {
-  const pass = await one('select token from passes where token = $1', [req.params.token]);
-  if (!pass) return res.status(404).send('Not found');
-  res.type('png').set('Cache-Control', 'public, max-age=300').send(await qrPng(passUrl(req, pass.token)));
+  if (!(await passes.tokenExists(req.params.token))) return res.status(404).send('Not found');
+  res.type('png').set('Cache-Control', 'public, max-age=300').send(await qrPng(passUrl(req, req.params.token)));
 }
 
 /* ---------- errors ---------- */

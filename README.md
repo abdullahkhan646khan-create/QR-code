@@ -7,48 +7,55 @@ QR codes for personal training at a gym.
 - **Scanning** a member's QR code shows the member, their trainer, and the expiry date: Valid, Expired, or Old QR code.
 - A member's QR code lasts the package length (1 month by default). **New month** makes a new code and the old one stops working; unused days carry over.
 
+## Database: Supabase
+
+All data is stored in Supabase. Run `supabase/schema.sql` once in Supabase > SQL Editor to create the tables. Every table has Row Level Security on with no policies, so the public anon key can't read anything; only the server, using the service role key, can.
+
+The server needs two values from Supabase > Settings > API:
+
+- `SUPABASE_URL`, like `https://<project-ref>.supabase.co`
+- `SUPABASE_SERVICE_ROLE_KEY`, a secret. Put it only in Render's environment variables or your local `.env`, never in git.
+
 ## Run on your computer
 
-Needs Node.js 20 or newer.
+Needs Node.js 22 or newer. Copy `.env.example` to `.env` and fill in the Supabase values, then:
 
 ```bash
 npm install
-npm start
+npm run dev
 ```
 
-Open http://localhost:3000. The first start creates a local database in `.data/` with sample data.
+Open http://localhost:3000. The first start adds sample trainers and members (turn off with `SEED_DEMO=false`).
 
 | Login | Username | Password |
 |---|---|---|
-| Gym owner | `owner` | `owner123` |
+| Gym owner | `owner` | the `ADMIN_PASSWORD` you set (`owner123` if not set) |
 | Sample trainers | `usman`, `sana`, `bilal` | `usman123`, `sana123`, `bilal123` |
 
-The camera scanner works on `localhost` and on the deployed https link. On a phone over plain http, use **Scan from a photo**.
-
-## Database: Supabase
-
-Data is stored in Supabase Postgres. The app needs only the database connection string (not the anon or service role key):
-
-1. Supabase > your project > **Connect** > **Session pooler**. Copy the URI and put your database password in it:
-   `postgresql://postgres.<project-ref>:<db-password>@aws-0-<region>.pooler.supabase.com:5432/postgres`
-2. Tables are created automatically on first start. To create them yourself, run `supabase/schema.sql` in the SQL Editor.
-
-Every table has Row Level Security on with no policies, so nothing is readable through Supabase's public REST API. Only the app's server reads the data.
+Changing `ADMIN_PASSWORD` and restarting resets the owner's password to it.
 
 ## Deploy on Render
 
-1. In Render: **New > Blueprint**, pick this GitHub repository. Render reads `render.yaml`.
-2. When asked, paste the Supabase connection string as `DATABASE_URL` and choose an `ADMIN_PASSWORD`.
-3. Open the Render link, log in as `owner` with that password.
-4. Open **WhatsApp** in the app and scan the code with the gym's phone (WhatsApp > Linked devices > Link a device).
+**New > Web Service**, pick this repository, then:
 
-Free plan notes:
-- The web service sleeps after 15 minutes without visits. The first visit after that takes about a minute. WhatsApp reconnects by itself when it wakes up. Open the app a minute before a demo.
-- Set `SEED_DEMO` to `false` before using it for a real gym.
+| Field | Value |
+|---|---|
+| Branch | `main` |
+| Region | Singapore |
+| Build command | `npm ci` |
+| Start command | `npm start` |
+| Instance | Free |
+| Health check path (Advanced) | `/healthz` |
+
+Environment variables: `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `ADMIN_PASSWORD`, `SESSION_SECRET` (press Generate), `NODE_VERSION` = `22`, `NODE_ENV` = `production`, `APP_TIMEZONE` = `Asia/Karachi`. Or use **New > Blueprint**, which reads `render.yaml`.
+
+Then open the Render link, log in as `owner`, go to **WhatsApp** and scan the code with the gym's phone (WhatsApp > Linked devices > Link a device).
+
+Free plan: the service sleeps after 15 minutes without visits; the first visit then takes about a minute, and WhatsApp reconnects by itself. Open the app a minute before a demo.
 
 ## WhatsApp
 
-The app links to WhatsApp the same way WhatsApp Web does, using the open-source Baileys library. This is not an official WhatsApp API: use a number the gym owns, and avoid bulk messages to people who haven't saved the number, or WhatsApp may block it. The link is saved in the database, so it survives restarts.
+The app links to WhatsApp the same way WhatsApp Web does, using the open-source Baileys library. This is not an official WhatsApp API: use a number the gym owns, and avoid bulk messages to people who haven't saved the number, or WhatsApp may block it. The link is saved in Supabase, so it survives restarts.
 
 When WhatsApp is not linked, every member card still has a **Send on WhatsApp** button that opens WhatsApp on the trainer's phone with the message and QR link ready.
 

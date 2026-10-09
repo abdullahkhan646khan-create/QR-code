@@ -1,23 +1,21 @@
 import makeWASocket, { Browsers, BufferJSON, DisconnectReason, fetchLatestBaileysVersion, initAuthCreds, proto } from 'baileys';
 import pino from 'pino';
 import QRCode from 'qrcode';
-import { q, one } from './db.js';
+import { waAuth } from './store.js';
 
 // Links the gym's WhatsApp like WhatsApp Web (unofficial). The login is kept in the wa_auth table,
 // so it survives restarts and Render's free-plan sleep.
 const logger = pino({ level: process.env.WA_LOG_LEVEL || 'silent' });
 const wa = { status: 'disconnected', qrDataUrl: null, me: null, sock: null, wanted: false, error: null, starting: false, qrCount: 0 };
 
+const encode = value => JSON.stringify(value, BufferJSON.replacer);
+const decode = text => JSON.parse(text, BufferJSON.reviver);
 async function readKey(key) {
-  const row = await one('select value from wa_auth where key = $1', [key]);
-  return row ? JSON.parse(row.value, BufferJSON.reviver) : null;
+  const found = await waAuth.getMany([key]);
+  return found[key] ? decode(found[key]) : null;
 }
-async function writeKey(key, value) {
-  await q('insert into wa_auth (key, value) values ($1, $2) on conflict (key) do update set value = excluded.value',
-    [key, JSON.stringify(value, BufferJSON.replacer)]);
-}
-const deleteKey = key => q('delete from wa_auth where key = $1', [key]);
-const clearAuth = () => q('delete from wa_auth');
+const writeKey = (key, value) => waAuth.setMany([{ key, value: encode(value) }]);
+const clearAuth = () => waAuth.clear();
 
 async function dbAuthState() {
   const creds = (await readKey('creds')) || initAuthCreds();
@@ -26,23 +24,25 @@ async function dbAuthState() {
       creds,
       keys: {
         get: async (type, ids) => {
+          const found = await waAuth.getMany(ids.map(id => `${type}-${id}`));
           const data = {};
-          await Promise.all(ids.map(async id => {
-            let value = await readKey(`${type}-${id}`);
+          for (const id of ids) {
+            let value = found[`${type}-${id}`] ? decode(found[`${type}-${id}`]) : null;
             if (type === 'app-state-sync-key' && value) value = proto.Message.AppStateSyncKeyData.fromObject(value);
             data[id] = value;
-          }));
+          }
           return data;
         },
         set: async data => {
-          const tasks = [];
+          const upserts = [], deletes = [];
           for (const category of Object.keys(data)) {
             for (const id of Object.keys(data[category])) {
               const value = data[category][id];
-              tasks.push(value ? writeKey(`${category}-${id}`, value) : deleteKey(`${category}-${id}`));
+              if (value) upserts.push({ key: `${category}-${id}`, value: encode(value) }); else deletes.push(`${category}-${id}`);
             }
           }
-          await Promise.all(tasks);
+          if (upserts.length) await waAuth.setMany(upserts);
+          if (deletes.length) await waAuth.deleteMany(deletes);
         },
       },
     },
