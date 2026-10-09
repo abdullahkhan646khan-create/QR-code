@@ -25,16 +25,25 @@ Open http://localhost:3000. The first start creates a local database in `.data/`
 
 The camera scanner works on `localhost` and on the deployed https link. On a phone over plain http, use **Scan from a photo**.
 
+## Database: Supabase
+
+Data is stored in Supabase Postgres. The app needs only the database connection string (not the anon or service role key):
+
+1. Supabase > your project > **Connect** > **Session pooler**. Copy the URI and put your database password in it:
+   `postgresql://postgres.<project-ref>:<db-password>@aws-0-<region>.pooler.supabase.com:5432/postgres`
+2. Tables are created automatically on first start. To create them yourself, run `supabase/schema.sql` in the SQL Editor.
+
+Every table has Row Level Security on with no policies, so nothing is readable through Supabase's public REST API. Only the app's server reads the data.
+
 ## Deploy on Render
 
-1. Push this folder to a GitHub repository.
-2. In Render: **New > Blueprint**, pick the repository. Render reads `render.yaml` and creates the web service and a free Postgres database.
-3. Enter an `ADMIN_PASSWORD` when asked. Log in as `owner` with that password.
+1. In Render: **New > Blueprint**, pick this GitHub repository. Render reads `render.yaml`.
+2. When asked, paste the Supabase connection string as `DATABASE_URL` and choose an `ADMIN_PASSWORD`.
+3. Open the Render link, log in as `owner` with that password.
 4. Open **WhatsApp** in the app and scan the code with the gym's phone (WhatsApp > Linked devices > Link a device).
 
 Free plan notes:
 - The web service sleeps after 15 minutes without visits. The first visit after that takes about a minute. WhatsApp reconnects by itself when it wakes up. Open the app a minute before a demo.
-- Render's free Postgres database expires after 30 days unless upgraded.
 - Set `SEED_DEMO` to `false` before using it for a real gym.
 
 ## WhatsApp

@@ -8,13 +8,15 @@ let impl;
 
 export async function initDb() {
   if (process.env.DATABASE_URL) {
-    const pool = new pg.Pool({
-      connectionString: process.env.DATABASE_URL,
-      ssl: process.env.PGSSL === 'true' ? { rejectUnauthorized: false } : undefined,
-      max: 5,
-    });
+    // Supabase (and other hosted Postgres) need SSL. sslmode in the URL is dropped because pg would
+    // then insist on full certificate checks that Supabase's pooler certificate doesn't pass.
+    const url = new URL(process.env.DATABASE_URL);
+    const ssl = process.env.PGSSL === 'true' || /supabase\.(co|com)$/.test(url.hostname) || url.searchParams.has('sslmode');
+    url.searchParams.delete('sslmode');
+    const pool = new pg.Pool({ connectionString: url.toString(), ssl: ssl ? { rejectUnauthorized: false } : undefined, max: 5 });
+    pool.on('error', err => console.error('Database connection error', err.message));
     impl = { query: (text, params) => pool.query(text, params) };
-    console.log('Database: Postgres');
+    console.log(`Database: Postgres at ${url.hostname}`);
   } else {
     const { PGlite } = await import('@electric-sql/pglite');
     const dir = process.env.PGLITE_DIR || './.data/db';
@@ -66,6 +68,9 @@ const SCHEMA = [
      created_at timestamptz not null default now())`,
   `create table if not exists settings (key text primary key, value text not null)`,
   `create table if not exists wa_auth (key text primary key, value text not null)`,
+  // Only the app's server (the table owner) reads these. Row Level Security with no policies blocks
+  // Supabase's public REST API, which would otherwise expose them to anyone with the anon key.
+  ...['users', 'members', 'passes', 'scans', 'settings', 'wa_auth'].map(t => `alter table ${t} enable row level security`),
 ];
 
 async function migrate() {
