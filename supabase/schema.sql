@@ -52,8 +52,8 @@ create table if not exists settings (key text primary key, value text not null);
 -- WhatsApp linked-device login (keeps WhatsApp connected after restarts)
 create table if not exists wa_auth (key text primary key, value text not null);
 
--- Lock every table from Supabase's public API (anon / service keys over REST).
--- The app connects as the database owner, which is not affected.
+-- Lock every table from Supabase's public REST API (the anon key). The service role key still
+-- gets through, so keep it secret. The app connects as the database owner, which is not affected.
 alter table users enable row level security;
 alter table members enable row level security;
 alter table passes enable row level security;
