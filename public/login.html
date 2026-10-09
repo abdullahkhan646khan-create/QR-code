@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Log in · Trainer Pass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;500;600;700;800&display=swap">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/css/app.css">
+<style>
+  body { min-height: 100vh; display: grid; place-items: center; padding: 24px 16px; }
+  .login { width: min(100%, 400px); display: flex; flex-direction: column; gap: 22px; }
+  .login-brand { display: flex; align-items: center; gap: 12px; }
+  .login-brand .mark { width: 44px; height: 44px; border-radius: 12px; background: var(--primary); color: #FFFFFF; display: grid; place-items: center; }
+  .login-brand strong { display: block; font-size: 20px; font-weight: 800; letter-spacing: -.01em; }
+  .login-brand span { font-size: 14px; color: var(--muted); }
+  .login h1 { font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+  .pw-wrap { position: relative; }
+  .pw-wrap input { padding-right: 70px; }
+  .pw-wrap button { position: absolute; right: 6px; top: 50%; transform: translateY(-50%); border: 0; background: none; color: var(--primary); font-weight: 650; font-size: 14px; cursor: pointer; padding: 6px 8px; }
+</style>
+</head>
+<body>
+<main class="login">
+  <div class="login-brand">
+    <div class="mark"><svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="4" y="4" width="6" height="6" rx="1"/><rect x="14" y="4" width="6" height="6" rx="1"/><rect x="4" y="14" width="6" height="6" rx="1"/><path d="M14 14h2v2h-2zM18 18h2v2h-2zM14 19h1M19 14h1"/></svg></div>
+    <div><strong>Trainer Pass</strong><span>QR codes for personal training</span></div>
+  </div>
+  <form class="card card-pad form" id="login-form" novalidate>
+    <h1>Log in</h1>
+    <div class="form-error" id="err" role="alert" hidden></div>
+    <div class="field">
+      <label for="username">Username</label>
+      <input type="text" id="username" autocomplete="username" autocapitalize="none" spellcheck="false" required>
+    </div>
+    <div class="field">
+      <label for="password">Password</label>
+      <div class="pw-wrap">
+        <input type="password" id="password" autocomplete="current-password" required>
+        <button type="button" id="toggle-pw" aria-label="Show password">Show</button>
+      </div>
+    </div>
+    <button class="btn btn-primary btn-lg btn-block" type="submit" id="submit">Log in</button>
+    <p class="hint">Trainers: ask the gym owner for your username and password.</p>
+  </form>
+</main>
+<script>
+  const form = document.getElementById('login-form'), err = document.getElementById('err'), btn = document.getElementById('submit');
+  document.getElementById('toggle-pw').addEventListener('click', e => {
+    const pw = document.getElementById('password'), show = pw.type === 'password';
+    pw.type = show ? 'text' : 'password'; e.target.textContent = show ? 'Hide' : 'Show';
+  });
+  form.addEventListener('submit', async e => {
+    e.preventDefault();
+    const username = document.getElementById('username').value.trim(), password = document.getElementById('password').value;
+    if (!username || !password) { err.textContent = 'Enter your username and password.'; err.hidden = false; return; }
+    btn.disabled = true; btn.textContent = 'Logging in…'; err.hidden = true;
+    try {
+      const r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.error || 'Could not log in.');
+      location.href = '/app';
+    } catch (ex) {
+      err.textContent = ex.message === 'Failed to fetch' ? 'No connection. Check the internet and try again.' : ex.message;
+      err.hidden = false; btn.disabled = false; btn.textContent = 'Log in';
+    }
+  });
+</script>
+</body>
+</html>

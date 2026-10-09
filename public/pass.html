@@ -1,0 +1,51 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Your QR code · Trainer Pass</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;700;800&display=swap">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/css/app.css">
+<style>
+  body { min-height: 100vh; display: grid; place-items: center; padding: 20px 16px; }
+  .pass { width: min(100%, 380px); overflow: hidden; }
+  .pass-top { padding: 18px 20px; background: var(--primary); color: #FFFFFF; }
+  .pass-top strong { display: block; font-size: 20px; font-weight: 800; }
+  .pass-top span { font-size: 13px; opacity: .85; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+  .pass-qr { padding: 20px 20px 8px; }
+  .pass-qr img { display: block; width: 100%; height: auto; aspect-ratio: 1; image-rendering: pixelated; border: 1px solid var(--line); border-radius: var(--r); }
+  .pass-info { padding: 12px 20px 22px; display: flex; flex-direction: column; gap: 14px; }
+  .pass-name { font-size: 24px; font-weight: 800; letter-spacing: -.02em; }
+  dl { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  dt { font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--faint); }
+  dd { margin: 2px 0 0; font-weight: 650; }
+</style>
+</head>
+<body>
+<main class="card pass" id="pass">
+  <div class="empty" id="state">Loading your QR code…</div>
+</main>
+<script>
+  const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const fmt = iso => { const [y, m, d] = iso.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };
+  const token = location.pathname.split('/').filter(Boolean)[1];
+  fetch('/api/public/pass/' + encodeURIComponent(token)).then(r => r.json()).then(p => {
+    if (p.error) throw new Error(p.error);
+    document.title = `${p.member} · ${p.gymName}`;
+    const s = p.status, cls = s.key === 'valid' ? 'valid' : s.key === 'expired' ? 'expired' : 'replaced';
+    const note = s.key === 'valid' ? `${s.days} day${s.days === 1 ? '' : 's'} left` : s.key === 'replaced' ? 'This is an old QR code. Use the newest one sent to you.' : s.key === 'expired' ? 'Your package has ended. Ask your trainer to renew it.' : '';
+    document.getElementById('pass').innerHTML = `
+      <div class="pass-top"><span>Personal training</span><strong>${esc(p.gymName)}</strong></div>
+      <div class="pass-qr"><img src="${esc(p.qr)}" alt="Your QR code" width="640" height="640"></div>
+      <div class="pass-info">
+        <div><div class="pass-name">${esc(p.member)}</div><span class="pill ${cls}">${esc(s.label)}</span> <span class="muted small">${esc(note)}</span></div>
+        <dl><div><dt>Trainer</dt><dd>${esc(p.trainer)}</dd></div><div><dt>Valid until</dt><dd>${esc(fmt(p.end))}</dd></div></dl>
+        <p class="hint">Show this QR code at the front desk when you come to train.</p>
+      </div>`;
+  }).catch(err => { document.getElementById('state').textContent = err.message || 'This QR code could not be loaded.'; });
+</script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+{
+  "name": "trainer-pass",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Gym trainer QR passes: owner and trainer logins, QR codes sent on WhatsApp, and a scanner that shows the member's trainer and expiry.",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "baileys": "^7.0.0-rc14",
+    "express": "^5.2.1",
+    "jsqr": "1.4",
+    "pg": "^8.23.1",
+    "pino": "^10.4.0",
+    "qrcode": "1.5"
+  }
+}
