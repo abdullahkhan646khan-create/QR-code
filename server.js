@@ -35,4 +35,28 @@ const port = Number(process.env.PORT) || 3000;
 app.listen(port, () => {
   console.log(`Trainer Pass running on http://localhost:${port}`);
   resumeWhatsApp().catch(err => console.error('WhatsApp resume failed', err));
+  startHeartbeat();
 });
+
+// Heartbeat: Render's free plan sleeps after 15 minutes without visits, which also drops WhatsApp.
+// The app visits its own public address every 10 minutes so it stays awake. Render sets RENDER_EXTERNAL_URL.
+function startHeartbeat() {
+  const url = (process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '');
+  if (!url || process.env.KEEP_ALIVE === 'false') return;
+  const minutes = Number(process.env.KEEP_ALIVE_MINUTES) || 10;
+  let failures = 0;
+  const beat = async () => {
+    try {
+      const r = await fetch(`${url}/healthz`, { headers: { 'User-Agent': 'trainer-pass-heartbeat' }, signal: AbortSignal.timeout(30000) });
+      if (!r.ok) throw new Error(`status ${r.status}`);
+      if (failures) console.log('Heartbeat back to normal');
+      failures = 0;
+    } catch (err) {
+      failures++;
+      console.error(`Heartbeat failed (${failures}): ${err.message}`);
+    }
+  };
+  setTimeout(beat, 30000);
+  setInterval(beat, minutes * 60000);
+  console.log(`Heartbeat: visiting ${url} every ${minutes} minutes to stay awake`);
+}
