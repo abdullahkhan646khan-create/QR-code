@@ -178,10 +178,22 @@ api.patch('/trainers/:id', requireOwner, async (req, res) => {
   res.json({ ok: true });
 });
 
+// A trainer with members: ?moveTo=<trainerId> moves the members over, ?deleteMembers=1 deletes them and their QR codes.
 api.delete('/trainers/:id', requireOwner, async (req, res) => {
   const id = Number(req.params.id);
+  if (!(await users.trainer(id))) fail(404, 'Trainer not found.');
   const n = await members.countForTrainer(id);
-  if (n > 0) fail(409, `This trainer still has ${n} member${n === 1 ? '' : 's'}. Move them to another trainer first, or turn off the login instead.`);
+  if (n > 0) {
+    const moveTo = Number(req.query.moveTo);
+    if (moveTo) {
+      if (moveTo === id || !(await users.trainer(moveTo))) fail(400, 'Pick another trainer to move the members to.');
+      await members.moveAll(id, moveTo);
+    } else if (req.query.deleteMembers === '1') {
+      await members.removeAllForTrainer(id);
+    } else {
+      fail(409, `This trainer has ${n} member${n === 1 ? '' : 's'}. Choose to move them to another trainer or delete them.`);
+    }
+  }
   await users.removeTrainer(id);
   await disconnectWhatsApp(trainerSession(id)).catch(() => {});
   res.json({ ok: true });

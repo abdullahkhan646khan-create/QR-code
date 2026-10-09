@@ -48,7 +48,7 @@ function drawTable() {
       <div class="who"><div class="avatar">${esc(initials(m.name))}</div><div><strong>${esc(m.name)}</strong><span class="num">${esc(m.phone)}</span></div></div>
       ${owner ? `<div class="trn">${esc(m.trainer.name)}</div>` : ''}
       <div class="until"><strong>${m.pass ? fmtDate(m.pass.end) : '—'}</strong><span>${esc(v.note)}</span></div>
-      <div class="acts">${pill(m.status)}<button class="btn btn-sm" type="button" data-action="open-member" data-id="${m.id}">${icon('qr', 16)}QR</button></div>
+      <div class="acts">${pill(m.status)}<button class="btn btn-sm" type="button" data-action="open-member" data-id="${m.id}">${icon('qr', 16)}QR</button><button class="icon-btn btn-danger" type="button" data-action="delete-member" data-id="${m.id}" aria-label="Delete ${esc(m.name)}" title="Delete member">${icon('trash')}</button></div>
     </div>`;
   }).join('');
 }
@@ -209,7 +209,7 @@ export function openDeleteMember(id) {
   const m = memberById(id); if (!m) return;
   openModal('Delete member?', `
     <p>Delete <strong>${esc(m.name)}</strong>? Their QR code will stop working. This can't be undone.</p>
-    <div class="dialog-actions"><button class="btn" type="button" data-action="open-member" data-id="${m.id}">Cancel</button><button class="btn btn-danger-solid" type="button" data-action="confirm-delete-member" data-id="${m.id}">${icon('trash')}Delete</button></div>`);
+    <div class="dialog-actions"><button class="btn" type="button" data-action="close">Cancel</button><button class="btn btn-danger-solid" type="button" data-action="confirm-delete-member" data-id="${m.id}">${icon('trash')}Delete</button></div>`);
 }
 
 export async function deleteMember(btn, id) {

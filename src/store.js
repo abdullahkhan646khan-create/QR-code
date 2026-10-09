@@ -77,6 +77,8 @@ export const members = {
   update: (id, fields) => rows(sb.from('members').update(fields).eq('id', id)),
   remove: id => rows(sb.from('members').delete().eq('id', id)),
   countForTrainer: id => num(sb.from('members').select('id', { count: 'exact', head: true }).eq('trainer_id', id)),
+  moveAll: (fromTrainer, toTrainer) => rows(sb.from('members').update({ trainer_id: toTrainer }).eq('trainer_id', fromTrainer)),
+  removeAllForTrainer: id => rows(sb.from('members').delete().eq('trainer_id', id)), // their QR codes go too (cascade)
 };
 
 /* ---------- QR codes ---------- */

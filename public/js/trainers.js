@@ -30,6 +30,7 @@ export async function renderTrainers(view) {
         <button class="btn btn-sm" type="button" data-go="members" data-trainer="${t.id}">${icon('members', 16)}Members</button>
         <button class="btn btn-sm" type="button" data-action="add-member-for" data-id="${t.id}">${icon('plus', 16)}Add member</button>
         <button class="btn btn-sm btn-quiet" type="button" data-action="edit-trainer" data-id="${t.id}">${icon('edit', 16)}Edit</button>
+        <button class="btn btn-sm btn-quiet btn-danger" type="button" data-action="delete-trainer" data-id="${t.id}">${icon('trash', 16)}Delete</button>
       </div>
     </article>`).join('');
 }
@@ -128,17 +129,30 @@ export async function toggleTrainer(btn, id) {
 
 export function confirmDeleteTrainer(id) {
   const t = byId(id); if (!t) return;
-  if (t.members > 0) {
-    openModal('Can’t delete yet', `<p>${esc(t.name)} still has ${plural(t.members, 'member')}. Move them to another trainer first (open a member, then Edit), or turn the login off instead.</p>
-      <div class="dialog-actions"><button class="btn btn-primary" type="button" data-action="close">OK</button></div>`);
-    return;
-  }
-  openModal('Delete trainer?', `<p>Delete <strong>${esc(t.name)}</strong> and their login? This can't be undone.</p>
-    <div class="dialog-actions"><button class="btn" type="button" data-action="close">Cancel</button><button class="btn btn-danger-solid" type="button" data-action="confirm-delete-trainer" data-id="${t.id}">${icon('trash')}Delete</button></div>`);
+  const others = trainers.filter(x => x.id !== t.id && x.active);
+  const choice = t.members === 0 ? '' : `
+    <p><strong>${esc(t.name)}</strong> has ${plural(t.members, 'member')}. What should happen to them?</p>
+    <div class="form" style="gap:12px">
+      ${others.length ? `<label class="check"><input type="radio" name="dt-choice" value="move" checked>
+        <span style="display:flex;flex-direction:column;gap:6px;flex:1">Move them to another trainer (their QR codes keep working)
+        <select id="dt-to" aria-label="Move members to">${others.map(o => `<option value="${o.id}">${esc(o.name)}</option>`).join('')}</select></span></label>` : ''}
+      <label class="check"><input type="radio" name="dt-choice" value="delete"${others.length ? '' : ' checked'}> Delete them and their QR codes</label>
+    </div>`;
+  openModal('Delete trainer?', `
+    <div class="form-error" id="dt-err" hidden></div>
+    ${choice}
+    <p>${t.members === 0 ? `Delete <strong>${esc(t.name)}</strong> and their login?` : 'The trainer and their login will be deleted.'} This can't be undone.</p>
+    <div class="dialog-actions"><button class="btn" type="button" data-action="close">Cancel</button><button class="btn btn-danger-solid" type="button" data-action="confirm-delete-trainer" data-id="${t.id}">${icon('trash')}Delete trainer</button></div>`);
 }
 
 export async function deleteTrainer(btn, id) {
-  const r = await busy(btn, () => api(`/trainers/${id}`, { method: 'DELETE' }));
+  const t = byId(id); if (!t) return;
+  const move = t.members > 0 && document.querySelector('input[name="dt-choice"]:checked')?.value === 'move';
+  const target = move ? byId($('#dt-to').value) : null;
+  const query = !t.members ? '' : move ? `?moveTo=${target.id}` : '?deleteMembers=1';
+  const r = await busy(btn, () => api(`/trainers/${id}${query}`, { method: 'DELETE' }), $('#dt-err'));
   if (!r) return;
-  closeModal(); toast('Trainer deleted'); session.refresh();
+  closeModal();
+  toast(!t.members ? `${t.name} deleted` : move ? `${t.name} deleted. Members moved to ${target.name}.` : `${t.name} and ${plural(t.members, 'member')} deleted`);
+  session.refresh();
 }
