@@ -118,7 +118,17 @@ export const waAuth = {
   },
   setMany: async entries => { for (const part of chunks(entries, 200)) await rows(sb.from('wa_auth').upsert(part)); },
   deleteMany: async keys => { for (const part of chunks(keys, 100)) await rows(sb.from('wa_auth').delete().in('key', part)); },
-  clear: () => rows(sb.from('wa_auth').delete().neq('key', '')),
+  clearPrefix: prefix => rows(sb.from('wa_auth').delete().like('key', `${prefix}%`)),
+  // Connection ids ('gym', 't12', ...) that have a saved login.
+  sessionsWithCreds: async () => (await rows(sb.from('wa_auth').select('key').like('key', '%:creds'))).map(r => r.key.slice(0, -':creds'.length)),
+  // Keys saved before connections had a prefix get moved under `prefix` once.
+  moveLegacyKeys: async prefix => {
+    const legacy = await rows(sb.from('wa_auth').select('key, value').not('key', 'match', '^(gym|t[0-9]+):'));
+    if (!legacy.length) return;
+    for (const part of chunks(legacy, 200)) await rows(sb.from('wa_auth').upsert(part.map(r => ({ key: prefix + r.key, value: r.value }))));
+    for (const part of chunks(legacy.map(r => r.key), 100)) await rows(sb.from('wa_auth').delete().in('key', part));
+    console.log(`Moved ${legacy.length} saved WhatsApp keys to ${prefix}`);
+  },
 };
 
 /* ---------- first start ---------- */

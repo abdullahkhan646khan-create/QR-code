@@ -24,7 +24,10 @@ export async function renderHome(view) {
   const stat = (label, color, n, sub) => `<div class="card stat"><div class="stat-top"><i style="background:${color}"></i>${label}</div><div class="stat-n">${n}</div><div class="stat-sub">${sub}</div></div>`;
   view.innerHTML = `
     <div class="page-head"><div><h1>${greeting()}${owner ? '' : `, ${esc(session.me.user.name.split(' ')[0])}`}</h1><p>${owner ? `Here's what is happening at ${esc(session.me.gymName)} today.` : `Your members at ${esc(session.me.gymName)}.`}</p></div></div>
-    ${owner && o.whatsapp !== 'connected' ? `<div class="banner"><p><strong>WhatsApp is not connected</strong>Connect the gym's WhatsApp so QR codes are sent to members automatically.</p><button class="btn btn-wa" type="button" data-go="whatsapp">${icon('chat')}Connect WhatsApp</button></div>` : ''}
+    ${o.whatsapp.mine ? '' : `<div class="banner"><p>${owner
+      ? "<strong>WhatsApp is not connected</strong>Connect the gym's WhatsApp so QR codes are sent to members automatically."
+      : `<strong>Connect your WhatsApp</strong>${o.whatsapp.gym ? "QR codes go out from the gym's WhatsApp for now. Connect yours to send them from your own number." : 'Connect your WhatsApp so your members get their QR codes from your number.'}`}</p>
+      <button class="btn btn-wa" type="button" data-go="whatsapp">${icon('chat')}Connect WhatsApp</button></div>`}
     <div class="stats${owner ? ' six' : ''}">
       ${owner ? stat('Trainers', 'var(--primary)', o.trainers, 'with a login') : ''}
       ${stat(owner ? 'Members' : 'My members', 'var(--primary)', o.members, 'with a trainer')}
@@ -60,19 +63,41 @@ export async function renderHome(view) {
 let pollTimer = 0;
 export function stopWhatsAppPolling() { clearTimeout(pollTimer); }
 
+const isOwner = () => session.me.user.role === 'owner';
+
 export async function renderWhatsApp(view) {
+  const owner = isOwner();
   view.innerHTML = `
-    <div class="page-head"><div><h1>WhatsApp</h1><p>Link the gym's WhatsApp once. QR codes are then sent to members from that number.</p></div></div>
+    <div class="page-head"><div><h1>${owner ? 'WhatsApp' : 'My WhatsApp'}</h1><p>${owner
+      ? "Link the gym's WhatsApp once. Trainers can also link their own number from their login."
+      : 'Link your WhatsApp once. Your members get their QR codes from your number.'}</p></div></div>
     <div class="wa-grid">
       <section class="card card-pad" id="wa-main"><div class="result-wait"><div class="spinner"></div>Checking WhatsApp…</div></section>
-      <section class="card card-pad form">
+      ${owner ? `<section class="card card-pad form">
         <h2 style="font-size:16px;font-weight:750">Sending</h2>
         <label class="check"><input type="checkbox" id="wa-auto"${session.me.autoSend ? ' checked' : ''}> Send the QR code automatically when a member is added or gets a new month</label>
-        <div class="note">Use a WhatsApp number the gym owns. This links the app like WhatsApp Web, which WhatsApp does not officially support. If many messages go to people who never saved the number, WhatsApp can block it.</div>
-        <div class="note">If WhatsApp is not connected, trainers can still send each QR code with one tap from their own WhatsApp.</div>
-      </section>
+        <div class="note">A trainer who linked their own WhatsApp sends from their number. Otherwise QR codes go from the gym's number.</div>
+        <div class="list" id="wa-trainers" style="border:1px solid var(--line);border-radius:var(--r-sm)"><div class="empty">Loading trainers…</div></div>
+        <div class="note">Use numbers you own. This links like WhatsApp Web, which WhatsApp does not officially support. If many messages go to people who never saved the number, WhatsApp can block it.</div>
+      </section>` : `<section class="card card-pad form">
+        <h2 style="font-size:16px;font-weight:750">How sending works</h2>
+        <ul class="steps">
+          <li><b>Your WhatsApp linked:</b> QR codes go to your members from your number.</li>
+          <li><b>Not linked:</b> they go from the gym's WhatsApp${session.me.whatsapp.gym ? ' (connected)' : ' (not connected right now)'}.</li>
+          <li><b>Neither:</b> open the member and press <b>Send on WhatsApp</b> to send it yourself.</li>
+        </ul>
+        <div class="note">This links like WhatsApp Web, which WhatsApp does not officially support. Send only to your own members.</div>
+      </section>`}
     </div>`;
-  $('#wa-auto').addEventListener('change', async e => {
+  if (owner) {
+    api('/trainers').then(list => {
+      const box = $('#wa-trainers'); if (!box) return;
+      box.innerHTML = list.length ? list.map(t => `<div class="li"><div class="avatar">${esc(t.name.split(' ').map(w => w[0]).slice(0, 2).join(''))}</div>
+        <div class="who"><strong>${esc(t.name)}</strong><span>@${esc(t.username)}</span></div>
+        <span class="pill ${t.whatsapp ? 'valid' : 'off'}">${t.whatsapp ? 'WhatsApp linked' : 'Not linked'}</span></div>`).join('') : '<div class="empty">No trainers yet.</div>';
+    }).catch(() => {});
+  }
+  $('#wa-auto')?.addEventListener('change', async e => {
     try { await api('/settings', { method: 'PATCH', body: { autoSend: e.target.checked } }); session.me.autoSend = e.target.checked; toast('Saved'); }
     catch (err) { toast(err.message, { bad: true }); e.target.checked = !e.target.checked; }
   });
@@ -86,9 +111,11 @@ async function pollWhatsApp() {
   try { s = await api('/whatsapp'); } catch (err) { s = { status: 'error', error: err.message }; }
   if (!$('#wa-main')) return;
   drawWhatsApp(s);
-  const wasOn = session.me.whatsapp.connected;
-  session.me.whatsapp.connected = s.status === 'connected';
-  if (!wasOn && s.status === 'connected') { toast('WhatsApp connected'); session.updateNav(); }
+  const nowOn = s.status === 'connected';
+  if (nowOn !== session.me.whatsapp.mine) {
+    if (nowOn) toast('WhatsApp connected');
+    session.refreshMe(); // updates who sends, the menu dot and the buttons on member cards
+  }
   pollTimer = setTimeout(pollWhatsApp, ['connecting', 'reconnecting', 'qr'].includes(s.status) ? 2000 : 10000);
 }
 
@@ -116,10 +143,10 @@ function drawWhatsApp(s) {
   box.dataset.state = s.status;
   if (s.status === 'qr' && s.qr) {
     box.innerHTML = `<div class="form">
-      ${head('wait', 'Scan this code with the gym phone', 'The code changes every 20 seconds. Keep this page open.')}
+      ${head('wait', `Scan this code with ${isOwner() ? "the gym's phone" : 'your phone'}`, 'The code changes every 20 seconds. Keep this page open.')}
       <div class="wa-qr"><img src="${s.qr}" alt="WhatsApp link code" width="360" height="360"></div>
       <ol class="steps">
-        <li>Open <b>WhatsApp</b> on the gym's phone.</li>
+        <li>Open <b>WhatsApp</b> on ${isOwner() ? "the gym's phone" : 'your phone'}.</li>
         <li>Tap <b>Settings</b> (iPhone) or the <b>⋮ menu</b> (Android).</li>
         <li>Tap <b>Linked devices</b>, then <b>Link a device</b>.</li>
         <li>Point the phone at this code.</li>
@@ -135,7 +162,7 @@ function drawWhatsApp(s) {
   box.innerHTML = `<div class="form">
     ${head('', 'Not connected', 'QR codes are not sent automatically yet.')}
     ${s.error ? `<div class="form-error">${esc(s.error)}</div>` : ''}
-    <p>You need the gym's phone with WhatsApp on it. Press the button and scan the code that appears.</p>
+    <p>${isOwner() ? "You need the gym's phone with WhatsApp on it." : 'You need your phone with WhatsApp on it.'} Press the button and scan the code that appears.</p>
     <div><button class="btn btn-wa btn-lg" type="button" data-action="wa-connect">${icon('chat')}Connect WhatsApp</button></div>
   </div>`;
 }
@@ -147,8 +174,7 @@ export async function connectWhatsApp(btn) {
 export async function disconnectWhatsApp(btn) {
   const r = await busy(btn, () => api('/whatsapp/disconnect', { method: 'POST' }));
   if (!r) return;
-  session.me.whatsapp.connected = false; session.updateNav();
-  toast('WhatsApp disconnected'); pollWhatsApp();
+  toast('WhatsApp disconnected'); session.refreshMe(); pollWhatsApp();
 }
 
 /* ---------- settings (owner) & account ---------- */

@@ -3,7 +3,7 @@ import QRCode from 'qrcode';
 import { getSetting, setSetting, users, members, passes, scans } from './store.js';
 import { hashPassword, verifyPassword, setSession, clearSession, requireUser, requireOwner, loginAllowed, loginFailed, loginSucceeded } from './auth.js';
 import { todayISO, addDays, packageEnd, passStatus, fmtDate, normalizePhone, formatPhone, cleanText, startOfTodayISO } from './util.js';
-import { whatsappState, whatsappReady, connectWhatsApp, disconnectWhatsApp, sendImage, sendText } from './whatsapp.js';
+import { whatsappState, whatsappReady, whatsappReconnecting, whatsappWaitReady, connectWhatsApp, disconnectWhatsApp, sendImage, sendText, GYM, trainerSession, sessionFor } from './whatsapp.js';
 
 export const api = Router();
 
@@ -42,20 +42,41 @@ async function accessibleMember(req, id) {
   return row;
 }
 
+// Which WhatsApp sends a member's QR code: a trainer's own number first, then the gym's.
+// The owner sends from the gym's number, or the member's trainer's number if the gym isn't linked.
+async function senderFor(user, row) {
+  const order = user.role === 'trainer' ? [trainerSession(user.id), GYM] : [GYM, trainerSession(row.trainer_id)];
+  const ready = order.find(id => whatsappReady(id));
+  if (ready) return ready;
+  // A linked number that is still reconnecting (the app just woke up): wait for it instead of failing.
+  for (const id of order) if (whatsappReconnecting(id) && await whatsappWaitReady(id)) return id;
+  return null;
+}
+const fromLabel = id => (id === GYM ? 'gym' : 'trainer');
+
 // Sends the member's current QR code on WhatsApp. Never throws: returns what happened.
 async function sendPass(req, row) {
+  const sender = await senderFor(req.user, row);
+  if (!sender) return { sent: false, error: 'WhatsApp is not connected.' };
   try {
     const url = passUrl(req, row.token);
-    await sendImage(row.phone, await qrPng(url), await caption(row, url));
+    await sendImage(sender, row.phone, await qrPng(url), await caption(row, url));
     await passes.markSent(row.pass_id);
-    return { sent: true };
+    return { sent: true, from: fromLabel(sender) };
   } catch (err) {
     return { sent: false, error: err.message || 'Sending failed.' };
   }
 }
-const maybeSend = async (req, row) => (req.body?.send !== false && whatsappReady()
-  ? sendPass(req, row)
-  : { sent: false, error: whatsappReady() ? null : 'WhatsApp is not connected.' });
+const maybeSend = async (req, row) => (req.body?.send !== false ? sendPass(req, row) : { sent: false, error: null });
+
+// mine: this person's own number is linked. via: who sends right now ('mine' | 'gym' | null).
+function whatsappSummary(user) {
+  // A number that is linked but reconnecting counts as connected: sending waits for it.
+  const on = id => whatsappReady(id) || whatsappReconnecting(id);
+  const mine = on(sessionFor(user)), gym = on(GYM);
+  const via = user.role === 'owner' ? (gym ? 'gym' : null) : (mine ? 'mine' : gym ? 'gym' : null);
+  return { mine, gym, via, connected: !!via };
+}
 
 /* ---------- login ---------- */
 api.post('/login', async (req, res) => {
@@ -80,7 +101,7 @@ api.get('/me', requireUser, async (req, res) => {
     gymName: await gymName(),
     countryCode: await countryCode(),
     autoSend: (await getSetting('auto_send', 'true')) === 'true',
-    whatsapp: { connected: whatsappReady() },
+    whatsapp: whatsappSummary(req.user),
   });
 });
 
@@ -108,7 +129,7 @@ api.get('/overview', requireUser, async (req, res) => {
     trainers: trainerCount, scansToday,
     expiring: await Promise.all(expiring.map(x => shapeMember(req, x.r))),
     recentScans: recent,
-    whatsapp: whatsappState().status,
+    whatsapp: whatsappSummary(req.user),
   });
 });
 
@@ -117,7 +138,7 @@ api.get('/trainers', requireOwner, async (req, res) => {
   const [list, rows] = await Promise.all([users.trainers(), members.list()]);
   res.json(list.map(t => {
     const mine = rows.filter(r => r.trainer_id === t.id).map(r => passStatus(r.pass_id ? r : null));
-    return { ...t, phone: formatPhone(t.phone), members: mine.length, valid: mine.filter(s => s.key === 'valid').length, expired: mine.filter(s => s.key === 'expired').length };
+    return { ...t, phone: formatPhone(t.phone), members: mine.length, valid: mine.filter(s => s.key === 'valid').length, expired: mine.filter(s => s.key === 'expired').length, whatsapp: whatsappReady(trainerSession(t.id)) };
   }));
 });
 
@@ -162,6 +183,7 @@ api.delete('/trainers/:id', requireOwner, async (req, res) => {
   const n = await members.countForTrainer(id);
   if (n > 0) fail(409, `This trainer still has ${n} member${n === 1 ? '' : 's'}. Move them to another trainer first, or turn off the login instead.`);
   await users.removeTrainer(id);
+  await disconnectWhatsApp(trainerSession(id)).catch(() => {});
   res.json({ ok: true });
 });
 
@@ -290,13 +312,17 @@ api.patch('/settings', requireOwner, async (req, res) => {
   res.json({ ok: true });
 });
 
-api.get('/whatsapp', requireOwner, (req, res) => res.json(whatsappState()));
-api.post('/whatsapp/connect', requireOwner, async (req, res) => { await connectWhatsApp(); res.json(whatsappState()); });
-api.post('/whatsapp/disconnect', requireOwner, async (req, res) => { await disconnectWhatsApp(); res.json(whatsappState()); });
-api.post('/whatsapp/test', requireOwner, async (req, res) => {
+// Each person manages their own WhatsApp: the owner links the gym's number, a trainer links their own.
+api.get('/whatsapp', requireUser, (req, res) => res.json({ ...whatsappState(sessionFor(req.user)), gym: whatsappReady(GYM) }));
+api.post('/whatsapp/connect', requireUser, async (req, res) => { await connectWhatsApp(sessionFor(req.user)); res.json(whatsappState(sessionFor(req.user))); });
+api.post('/whatsapp/disconnect', requireUser, async (req, res) => { await disconnectWhatsApp(sessionFor(req.user)); res.json(whatsappState(sessionFor(req.user))); });
+api.post('/whatsapp/test', requireUser, async (req, res) => {
   const phone = normalizePhone(req.body?.phone, await countryCode());
   if (!phone) fail(400, 'Enter a WhatsApp number.');
-  try { await sendText(phone, `Test message from ${await gymName()}. WhatsApp is connected and QR codes can be sent.`); }
+  try {
+    if (!(await whatsappWaitReady(sessionFor(req.user)))) throw new Error('WhatsApp is not connected.');
+    await sendText(sessionFor(req.user), phone, `Test message from ${await gymName()}. WhatsApp is connected and QR codes can be sent.`);
+  }
   catch (err) { fail(502, err.message); }
   res.json({ ok: true });
 });

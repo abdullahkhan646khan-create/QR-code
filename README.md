@@ -57,7 +57,9 @@ Free plan: the service sleeps after 15 minutes without visits; the first visit t
 
 The app links to WhatsApp the same way WhatsApp Web does, using the open-source Baileys library. This is not an official WhatsApp API: use a number the gym owns, and avoid bulk messages to people who haven't saved the number, or WhatsApp may block it. The link is saved in Supabase, so it survives restarts.
 
-When WhatsApp is not linked, every member card still has a **Send on WhatsApp** button that opens WhatsApp on the trainer's phone with the message and QR link ready.
+Each trainer can link their own WhatsApp from **WhatsApp** in their login; their members' QR codes are then sent from the trainer's number. A trainer who hasn't linked one sends through the gym's WhatsApp (linked by the owner). Right after linking, the app sends a "connected" message to that number. After Render wakes the app up, sending waits a few seconds for WhatsApp to reconnect instead of failing.
+
+When no WhatsApp is linked, every member card still has a **Send on WhatsApp** button that opens WhatsApp on the phone with the message and QR link ready.
 
 ## Settings (environment variables)
 

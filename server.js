@@ -26,7 +26,7 @@ app.get('/app', (req, res) => (req.user ? page('app.html')(req, res) : res.redir
 app.get('/p/:token', page('pass.html'));
 app.get('/p/:token/qr.png', publicQrPng);
 app.get('/vendor/jsQR.js', (req, res) => res.sendFile(path.join(root, 'node_modules/jsqr/dist/jsQR.js')));
-app.get('/healthz', (req, res) => res.send('ok'));
+app.get('/healthz', (req, res) => res.send(`ok ${(process.env.RENDER_GIT_COMMIT || 'local').slice(0, 7)}`));
 app.get('/favicon.ico', (req, res) => res.redirect(301, '/favicon.svg'));
 app.use(express.static(path.join(root, 'public'), { index: false, maxAge: '1h' }));
 app.use((req, res) => res.status(404).type('text').send('Page not found'));

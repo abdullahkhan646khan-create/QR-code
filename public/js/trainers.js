@@ -19,7 +19,7 @@ export async function renderTrainers(view) {
       <div class="tcard-top">
         <div class="avatar">${esc(initials(t.name))}</div>
         <div class="who"><strong>${esc(t.name)}</strong><span>@${esc(t.username)}${t.phone ? ` · ${esc(t.phone)}` : ''}</span></div>
-        ${t.active ? '' : '<span class="pill off">Login off</span>'}
+        ${t.active ? `<span class="pill ${t.whatsapp ? 'valid' : 'off'}" title="${t.whatsapp ? 'Sends QR codes from their own WhatsApp' : "Uses the gym's WhatsApp"}">${t.whatsapp ? 'WhatsApp' : 'No WhatsApp'}</span>` : '<span class="pill off">Login off</span>'}
       </div>
       <div class="tcard-nums">
         <div><b>${t.members}</b><span>Members</span></div>

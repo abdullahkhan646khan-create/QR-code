@@ -10,10 +10,11 @@ const NAV = {
     ['scan', 'Scan', 'scan', renderScan], ['whatsapp', 'WhatsApp', 'chat', renderWhatsApp], ['settings', 'Settings', 'gear', renderSettings],
   ],
   trainer: [
-    ['home', 'Home', 'home', renderHome], ['members', 'My members', 'members', renderMembers], ['scan', 'Scan', 'scan', renderScan], ['account', 'Account', 'gear', renderAccount],
+    ['home', 'Home', 'home', renderHome], ['members', 'My members', 'members', renderMembers], ['scan', 'Scan', 'scan', renderScan],
+    ['whatsapp', 'WhatsApp', 'chat', renderWhatsApp], ['account', 'Account', 'gear', renderAccount],
   ],
 };
-const BOTTOM = { owner: ['home', 'trainers', 'members', 'scan', 'whatsapp'], trainer: ['home', 'members', 'scan', 'account'] };
+const BOTTOM = { owner: ['home', 'trainers', 'members', 'scan', 'whatsapp'], trainer: ['home', 'members', 'scan', 'whatsapp', 'account'] };
 let current = null, params = {};
 
 function navItems() { return NAV[session.me.user.role]; }
@@ -24,7 +25,7 @@ function updateNav() {
   $('#me-name').textContent = me.user.name;
   $('#me-role').textContent = me.user.role === 'owner' ? 'Gym owner' : 'Trainer';
   $('#me-avatar').textContent = initials(me.user.name);
-  $('#side-nav').innerHTML = items.map(([id, label, ic]) => `<button class="nav-btn" type="button" data-go="${id}">${icon(ic)}${esc(label)}${id === 'whatsapp' ? `<span class="nav-dot${me.whatsapp.connected ? ' on' : ''}" title="${me.whatsapp.connected ? 'Connected' : 'Not connected'}"></span>` : ''}</button>`).join('');
+  $('#side-nav').innerHTML = items.map(([id, label, ic]) => `<button class="nav-btn" type="button" data-go="${id}">${icon(ic)}${esc(label)}${id === 'whatsapp' ? `<span class="nav-dot${me.whatsapp.mine ? ' on' : ''}" title="${me.whatsapp.mine ? 'Connected' : 'Not connected'}"></span>` : ''}</button>`).join('');
   $('#bottom-nav').innerHTML = BOTTOM[me.user.role].map(id => { const [, label, ic] = items.find(x => x[0] === id); return `<button class="bn-btn" type="button" data-go="${id}">${icon(ic)}${esc(label === 'My members' ? 'Members' : label)}</button>`; }).join('');
   $('#top-settings').hidden = me.user.role !== 'owner';
   markCurrent();
@@ -47,6 +48,11 @@ async function go(id, p = {}, { keepScroll = false } = {}) {
   try { await item[3](view, p); }
   catch (err) { view.innerHTML = `<div class="card empty">${esc(err.message)} <button class="btn btn-sm" type="button" data-go="${current}">Try again</button></div>`; }
   window.scrollTo(0, keepScroll ? y : 0);
+}
+
+// Updates who is logged in and the WhatsApp state (menu dot, send buttons) without redrawing the page.
+async function refreshMe() {
+  try { session.me = await api('/me'); updateNav(); } catch { /* keep old */ }
 }
 
 // Re-draws the current page after a change (and refreshes the WhatsApp state for buttons).
@@ -103,6 +109,7 @@ document.addEventListener('visibilitychange', () => { if (document.hidden) stopC
   try { session.me = await api('/me'); }
   catch (err) { $('#main').innerHTML = `<div class="view"><div class="card empty">${esc(err.message)}</div></div>`; return; }
   session.refresh = refresh;
+  session.refreshMe = refreshMe;
   session.updateNav = updateNav;
   current = location.hash.slice(1) || 'home';
   updateNav();

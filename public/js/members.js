@@ -60,7 +60,8 @@ export function openMember(m, { send = null, created = false } = {}) {
   if (!m) return;
   const v = statusView(m.status), slug = m.name.toLowerCase().replace(/[^a-z0-9]+/g, '-');
   let sendHtml = '';
-  if (send?.sent) sendHtml = `<div class="send-ok">${icon('check')}Sent to ${esc(m.phone)} on WhatsApp</div>`;
+  const fromText = s => (s === 'gym' ? " from the gym's WhatsApp" : isOwner() ? " from the trainer's WhatsApp" : ' from your WhatsApp');
+  if (send?.sent) sendHtml = `<div class="send-ok">${icon('check')}Sent to ${esc(m.phone)}${esc(fromText(send.from))}</div>`;
   else if (send?.error && waOn()) sendHtml = `<div class="send-err">Not sent: ${esc(send.error)}</div>`;
   const canShare = !!(navigator.canShare && window.File);
   openModal(created ? 'Member added' : m.name, `
@@ -78,9 +79,10 @@ export function openMember(m, { send = null, created = false } = {}) {
           ${sendHtml}
           ${waOn()
             ? `<button class="btn btn-wa" type="button" data-action="send-wa" data-id="${m.id}">${icon('send')}${send?.sent || m.pass?.sentAt ? 'Send again on WhatsApp' : 'Send on WhatsApp'}</button>
-               <a class="btn btn-sm" href="${esc(m.waLink)}" target="_blank" rel="noopener">${icon('chat', 16)}Open in my WhatsApp instead</a>`
+               <p class="hint">Sends the QR code${esc(fromText(session.me.whatsapp.via === 'mine' ? 'mine' : 'gym'))}.${!isOwner() && session.me.whatsapp.via === 'gym' ? ' <a href="#whatsapp" data-go="whatsapp">Connect yours</a> to send from your number.' : ''}</p>
+               <a class="btn btn-sm" href="${esc(m.waLink)}" target="_blank" rel="noopener">${icon('chat', 16)}Open in WhatsApp on this phone instead</a>`
             : `<a class="btn btn-wa" href="${esc(m.waLink)}" target="_blank" rel="noopener">${icon('send')}Send on WhatsApp</a>
-               <p class="hint">Opens WhatsApp on this device with the message and QR link ready. Press send.${isOwner() ? ' To send automatically, <a href="#whatsapp" data-go="whatsapp">connect WhatsApp</a>.' : ''}</p>`}
+               <p class="hint">Opens WhatsApp on this device with the message and QR link ready. Press send. To send automatically, <a href="#whatsapp" data-go="whatsapp">connect ${isOwner() ? "the gym's" : 'your'} WhatsApp</a>.</p>`}
           <p class="hint">${m.pass?.sentAt ? `Last sent ${esc(fmtTime(m.pass.sentAt))}.` : 'Not sent from the app yet.'}</p>
           <div class="btn-row">
             ${canShare ? `<button class="btn btn-sm" type="button" data-action="share-qr" data-id="${m.id}">${icon('share', 16)}Share image</button>` : ''}
